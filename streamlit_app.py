@@ -1,9 +1,19 @@
+\n
+def weserv_proxy(url: str) -> str:
+    try:
+        # Proxy through images.weserv.nl (public image proxy). If it fails, caller will fallback.
+        # We avoid double-encoding the scheme.
+        safe = quote(url, safe=":/%?#[]@!$&'()*+,;=")
+        return f"https://images.weserv.nl/?url={safe}"
+    except Exception:
+        return url
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
-import requests
 from urllib.parse import urlparse, quote
+import requests
+import io
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
@@ -17,7 +27,6 @@ def prettify_label(s: str) -> str:
     s = " ".join(s.split())
     return s.strip().title()
 
-
 @st.cache_data(show_spinner=False)
 def read_csv_any(uploaded) -> pd.DataFrame:
     try:
@@ -28,7 +37,6 @@ def read_csv_any(uploaded) -> pd.DataFrame:
         except Exception:
             pass
         return pd.read_csv(uploaded, low_memory=False)
-
 
 def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
@@ -43,31 +51,13 @@ def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
-
 def looks_like_url(s: str) -> bool:
     if not isinstance(s, str) or not s:
         return False
-    if s.startswith("urn:"):
-        return False
-    try:
-        u = urlparse(s)
-        return u.scheme in ("http", "https") and bool(u.netloc)
-    except Exception:
-        return False
-
-
-def weserv_proxy(url: str) -> str:
-    """Proxy via images.weserv.nl pour contourner les blocages LinkedIn."""
-    try:
-        safe = quote(url, safe=":/%?#[]@!$&'()*+,;=")
-        return f"https://images.weserv.nl/?url={safe}"
-    except Exception:
-        return url
 
 
 @st.cache_data(show_spinner=False)
 def fetch_image_bytes(url: str):
-    """Télécharge une image côté serveur avec entêtes LinkedIn-friendly."""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
@@ -76,13 +66,27 @@ def fetch_image_bytes(url: str):
         }
         r = requests.get(url, headers=headers, timeout=6)
         if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
-            return r.content[:5 * 1024 * 1024]  # max 5MB
+            # Limit size to ~5MB
+            content = r.content[:5*1024*1024]
+            return content
     except Exception:
         return None
     return None
+    if s.startswith("urn:"):
+        return False
+    try:
+        u = urlparse(s)
+        return u.scheme in ("http", "https") and bool(u.netloc)
+    except Exception:
+        return False
 
+# Columns to ignore in filters
+IGNORE_FILTERS = [
+    "error", "company slug", "job date range", "profile image urn", "profile urn",
+    "school urn", "school company slug", "mutual connections", "profile url",
+    "scraper fullname", "school date range"
+]
 
-# --- Chargement du CSV
 st.title("📇 Lead Manager")
 st.caption("Grille de cartes + filtres optimisés")
 
@@ -94,17 +98,14 @@ if uploaded is None:
 df = read_csv_any(uploaded)
 df = coerce_datetimes(df)
 
-# --- Suppression des colonnes inutiles
-IGNORE_FILTERS = [
-    "error", "company slug", "job date range", "profile image urn", "profile urn",
-    "school urn", "school company slug", "mutual connections", "profile url",
-    "scraper fullname", "school date range"
-]
-
-usable_cols = [c for c in df.columns if not any(x in c.lower() for x in IGNORE_FILTERS)]
+# Filter out ignored columns
+def is_ignored(col: str) -> bool:
+    lc = col.lower()
+    return any(x in lc for x in IGNORE_FILTERS)
+usable_cols = [c for c in df.columns if not is_ignored(c)]
 df_use = df[usable_cols].copy()
 
-# --- Colonnes fixes selon ton fichier
+# -------- Fixed column mapping (per user)
 col_first = "firstName" if "firstName" in df_use.columns else None
 col_last = "lastName" if "lastName" in df_use.columns else None
 col_company = "companyName" if "companyName" in df_use.columns else None
@@ -112,14 +113,14 @@ col_job = "linkedinHeadline" if "linkedinHeadline" in df_use.columns else None
 col_photo = "linkedinprofileImageurl" if "linkedinprofileImageurl" in df_use.columns else None
 col_location = "linkedinJobLocation" if "linkedinJobLocation" in df_use.columns else None
 
-# --- Statistiques haut de page
+# -------- KPIs
 st.markdown("### 📈 Statistiques")
 colK1, colK2 = st.columns(2)
 colK1.metric("Leads (total)", f"{len(df_use):,}")
 if col_company:
     colK2.metric("Entreprises uniques", f"{df_use[col_company].nunique():,}")
 
-# --- Filtres principaux (3 colonnes)
+# -------- Top filters (3 columns)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
 
@@ -139,7 +140,6 @@ for c in df_use.columns:
     if company_founded_col is None and "founded" in lc:
         company_founded_col = c
 
-
 def add_numeric_slider(label_fr, series, key_name):
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().any():
@@ -148,14 +148,12 @@ def add_numeric_slider(label_fr, series, key_name):
             v = st.slider(label_fr, lo, hi, (lo, hi), key=f"sl_{key_name}")
             top_filters[key_name] = ("num_range_nanpass", v)
 
-
 def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
     uniques = series.dropna().astype(str).unique()
     if 1 <= len(uniques) <= max_unique:
         v = st.multiselect(label_fr, sorted(map(str, uniques)), key=f"ms_{key_name}")
         if v:
             top_filters[key_name] = ("in", set(v))
-
 
 cols = st.columns(3, gap="large")
 filter_specs = [
@@ -172,10 +170,10 @@ for i, (label, c, kind) in enumerate(filter_specs):
             else:
                 add_categorical_multiselect(label, df_use[c], c, max_unique=50)
 
-# --- Filtres texte (unique keys)
+# -------- Sidebar: only text search filters (unique keys)
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
-skip_cols = {x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x}
+skip_cols = set([x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x])
 for c in df_use.columns:
     if c in skip_cols:
         continue
@@ -187,7 +185,7 @@ for c in df_use.columns:
     if val:
         text_filters[c] = ("contains", val.lower())
 
-# --- Application des filtres
+# -------- Apply filters
 def apply_all_filters(df_in: pd.DataFrame):
     df_out = df_in.copy()
     mask = pd.Series([True] * len(df_out), index=df_out.index)
@@ -209,10 +207,9 @@ def apply_all_filters(df_in: pd.DataFrame):
         mask &= s.astype(str).str.lower().str.contains(val, na=False)
     return df_out[mask]
 
-
 filtered = apply_all_filters(df_use)
 
-# --- Pagination
+# -------- Pagination
 st.sidebar.header("🧭 Pagination")
 page_size = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96], index=1, key="page_size")
 total_rows = len(filtered)
@@ -222,7 +219,7 @@ start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
 
 st.markdown(f"**{total_rows:,} leads** après filtres • Page **{page}/{total_pages}**")
 
-# --- Résultats
+# -------- Cards
 st.markdown("### 🧾 Résultats")
 
 st.markdown(
@@ -245,13 +242,12 @@ st.markdown(
     .lead-sub { color: rgba(49,51,63,0.7); font-size: 0.95rem; }
     .lead-loc { color: rgba(49,51,63,0.6); font-size: 0.85rem; }
     </style>
-    """,
+        """,
     unsafe_allow_html=True,
 )
 
 subset = filtered.iloc[start:end]
 cards_per_row = st.selectbox("Cartes par ligne", [3, 4, 6], index=1, key="cards_per_row_selector")
-
 
 def get_display_name(row):
     parts = []
@@ -261,11 +257,11 @@ def get_display_name(row):
         parts.append(str(row[col_last]).strip())
     return " ".join(parts) if parts else "(Sans nom)"
 
-
 def get_company_job(row):
     comp = str(row[col_company]).strip() if col_company and pd.notna(row.get(col_company, np.nan)) else ""
     job = str(row[col_job]).strip() if col_job and pd.notna(row.get(col_job, np.nan)) else ""
     return f"{comp} — {job}" if comp and job else (comp or job or "")
+
 
 
 def render_card(rec):
@@ -278,7 +274,7 @@ def render_card(rec):
                 st.image(io.BytesIO(data), use_container_width=True)
                 fetched = True
             else:
-                # Proxy fallback
+                # Try weserv proxy url
                 proxy_url = weserv_proxy(img)
                 try:
                     st.image(proxy_url, use_container_width=True)
@@ -301,10 +297,11 @@ def render_card(rec):
     st.markdown(html, unsafe_allow_html=True)
 
 
+
 rows = []
 recs = list(subset.to_dict(orient="records"))
 for i in range(0, len(recs), cards_per_row):
-    rows.append(recs[i:i + cards_per_row])
+    rows.append(recs[i:i+cards_per_row])
 
 for row in rows:
     cols = st.columns(cards_per_row, gap="large")
@@ -312,28 +309,23 @@ for row in rows:
         with col:
             render_card(rec)
 
-# --- Debug images
+
 with st.expander("🔧 Debug images"):
+    sample_urls = []
     if col_photo and col_photo in df_use.columns:
         sample_urls = [u for u in df_use[col_photo].dropna().astype(str).head(5).tolist() if looks_like_url(u)]
-        if not sample_urls:
-            st.write("Aucune URL valide détectée.")
-        else:
-            for u in sample_urls:
-                st.write("URL:", u)
-                data = fetch_image_bytes(u)
-                st.write("fetch_image_bytes:", "OK" if data else "None")
-                if not data:
-                    st.write("weserv proxy test:")
-                    st.image(weserv_proxy(u))
-
-# --- Export CSV
-st.download_button(
-    "⬇️ Télécharger le CSV filtré",
-    data=filtered.to_csv(index=False).encode("utf-8"),
-    file_name="leads_filtres.csv",
-    mime="text/csv",
-)
+    if not sample_urls:
+        st.write("Aucune URL valide détectée.")
+    else:
+        for u in sample_urls:
+            st.write("URL:", u)
+            data = fetch_image_bytes(u)
+            st.write("fetch_image_bytes:", "OK" if data else "None")
+            if not data:
+                st.write("weserv proxy test:")
+                st.image(weserv_proxy(u))
+\n\nst.download_button("⬇️ Télécharger le CSV filtré", data=filtered.to_csv(index=False).encode("utf-8"),
+                   file_name="leads_filtres.csv", mime="text/csv")
 
 with st.expander("📊 Statistiques détaillées"):
     try:
