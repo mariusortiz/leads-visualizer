@@ -15,6 +15,65 @@ def prettify_label(s: str) -> str:
     s = " ".join(s.split())
     return s.strip().title()
 
+
+# French labels mapping for column names
+FRENCH_LABELS = {
+    "companyindustry": "Secteur d’activité",
+    "companyname": "Nom de l’entreprise",
+    "companywebsite": "Site web de l’entreprise",
+    "companyurl": "URL de l’entreprise",
+    "companyslug": "Identifiant entreprise (slug)",
+    "companyheadquarter": "Siège social",
+    "companyspecialities": "Spécialités de l’entreprise",
+    "companydescription": "Description de l’entreprise",
+    "companytagline": "Slogan / Baseline",
+    "firstname": "Prénom",
+    "lastname": "Nom",
+    "scraperfullname": "Nom complet",
+    "profileslug": "Identifiant profil (slug)",
+    "profileurl": "URL du profil",
+    "profileurn": "Identifiant LinkedIn (URN)",
+    "profileimageurl": "Photo de profil",
+    "profileimageurn": "Identifiant photo (URN)",
+    "professionalemail": "Email professionnel",
+    "refreshedat": "Date de mise à jour",
+    "mutualconnectionsurl": "URL des relations communes",
+    "connectionsurl": "URL des connexions",
+    "headline": "Titre / Fonction actuelle",
+    "ishiringbadge": "Recrute actuellement",
+    "isopentoworkbadge": "Ouvert aux opportunités",
+    "jobdaterange": "Période d’emploi actuelle",
+    "joblocation": "Lieu de travail",
+    "jobtitle": "Poste actuel",
+    "jobdescription": "Description du poste",
+    "previouscompanyname": "Ancienne entreprise",
+    "previouscompanyslug": "Identifiant ancienne entreprise",
+    "previousjobdaterange": "Période d’emploi précédente",
+    "previousjoblocation": "Lieu de l’emploi précédent",
+    "previousjobtitle": "Poste précédent",
+    "previousjobdescription": "Description du poste précédent",
+    "schoolname": "Établissement scolaire",
+    "schoolurl": "Site de l’école",
+    "schoolcompanyslug": "Identifiant de l’école",
+    "schooldaterange": "Période d’études",
+    "schooldegree": "Diplôme obtenu",
+    "schooldescription": "Description de la formation",
+    "previousschoolname": "Ancienne école",
+    "previousschoolurl": "Site de l’ancienne école",
+    "previousschoolcompanyslug": "Identifiant ancienne école",
+    "previousschooldaterange": "Période ancienne formation",
+    "previousschooldegree": "Diplôme ancien",
+    "previousschooldescription": "Description ancienne formation",
+    "skillslabel": "Compétences",
+    "location": "Localisation générale",
+    "description": "Description du profil"
+}
+
+def fr_label(col: str) -> str:
+    if not isinstance(col, str):
+        return str(col)
+    key = col.lower()
+    return FRENCH_LABELS.get(key, prettify_label(col))
 def find_col(df: pd.DataFrame, candidates) -> str | None:
     if df is None or df.empty:
         return None
@@ -150,7 +209,7 @@ for c in df.columns:
         continue
     if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_datetime64_any_dtype(df[c]):
         continue
-    val = st.sidebar.text_input(prettify_label(c), "", key=f"txt_{c}")
+    val = st.sidebar.text_input(fr_label(c), "", key=f"txt_{c}")
     if val:
         text_filters[c] = ("contains", val.lower())
 
