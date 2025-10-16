@@ -1,8 +1,17 @@
+\n
+def weserv_proxy(url: str) -> str:
+    try:
+        # Proxy through images.weserv.nl (public image proxy). If it fails, caller will fallback.
+        # We avoid double-encoding the scheme.
+        safe = quote(url, safe=":/%?#[]@!$&'()*+,;=")
+        return f"https://images.weserv.nl/?url={safe}"
+    except Exception:
+        return url
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 import requests
 import io
 
@@ -254,25 +263,26 @@ def get_company_job(row):
     return f"{comp} — {job}" if comp and job else (comp or job or "")
 
 
+
 def render_card(rec):
-    img_html = ""
+    fetched = False
     if col_photo:
         img = rec.get(col_photo)
         if isinstance(img, str) and looks_like_url(img):
-            # Try server-side fetch first to bypass client CORS/cookies
             data = fetch_image_bytes(img)
             if data:
                 st.image(io.BytesIO(data), use_container_width=True)
+                fetched = True
             else:
-                # Fallback to client-side <img> (may still work)
-                img_html = f'<img src="{img}" alt="photo">'
-    if not img_html:
-        # We either drew with st.image already, or need placeholder
-        if 'data' in locals() and data:
-            pass
-        else:
-            img_html = '<div style="width:100%;aspect-ratio:1.8;background:rgba(0,0,0,0.03);border-radius:10px;"></div>'
-            st.markdown(img_html, unsafe_allow_html=True)
+                # Try weserv proxy url
+                proxy_url = weserv_proxy(img)
+                try:
+                    st.image(proxy_url, use_container_width=True)
+                    fetched = True
+                except Exception:
+                    fetched = False
+    if not fetched:
+        st.markdown('<div style="width:100%;aspect-ratio:1.8;background:rgba(0,0,0,0.03);border-radius:10px;"></div>', unsafe_allow_html=True)
 
     name = get_display_name(rec)
     sub = get_company_job(rec)
@@ -287,6 +297,7 @@ def render_card(rec):
     st.markdown(html, unsafe_allow_html=True)
 
 
+
 rows = []
 recs = list(subset.to_dict(orient="records"))
 for i in range(0, len(recs), cards_per_row):
@@ -298,7 +309,22 @@ for row in rows:
         with col:
             render_card(rec)
 
-st.download_button("⬇️ Télécharger le CSV filtré", data=filtered.to_csv(index=False).encode("utf-8"),
+
+with st.expander("🔧 Debug images"):
+    sample_urls = []
+    if col_photo and col_photo in df_use.columns:
+        sample_urls = [u for u in df_use[col_photo].dropna().astype(str).head(5).tolist() if looks_like_url(u)]
+    if not sample_urls:
+        st.write("Aucune URL valide détectée.")
+    else:
+        for u in sample_urls:
+            st.write("URL:", u)
+            data = fetch_image_bytes(u)
+            st.write("fetch_image_bytes:", "OK" if data else "None")
+            if not data:
+                st.write("weserv proxy test:")
+                st.image(weserv_proxy(u))
+\n\nst.download_button("⬇️ Télécharger le CSV filtré", data=filtered.to_csv(index=False).encode("utf-8"),
                    file_name="leads_filtres.csv", mime="text/csv")
 
 with st.expander("📊 Statistiques détaillées"):
