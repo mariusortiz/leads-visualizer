@@ -43,7 +43,7 @@ def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
 def looks_like_url(s: str) -> bool:
     if not isinstance(s, str) or not s:
         return False
-    if s.startswith("urn:"):  # LinkedIn URN or similar
+    if s.startswith("urn:"):
         return False
     try:
         u = urlparse(s)
@@ -78,103 +78,92 @@ df_use = df[usable_cols].copy()
 
 # -------- KPIs
 st.markdown("### 📈 Statistiques")
-colK1, colK2, colK3, colK4 = st.columns(4)
+colK1, colK2 = st.columns(2)
 colK1.metric("Leads (total)", f"{len(df_use):,}")
-# Entreprises uniques si colonne sélectionnée plus bas
 
-# -------- Mapping de colonnes (utilisateur)
+# -------- Mapping de colonnes
 st.sidebar.header("🧩 Mapping des colonnes")
 def pick(label, default=None):
     opts = ["—"] + list(df_use.columns)
     idx = 0
     if default in df_use.columns:
-        idx = opts.index(default) if default in opts else 0
+        try:
+            idx = opts.index(default)
+        except ValueError:
+            idx = 0
     return st.sidebar.selectbox(label, opts, index=idx)
 
-# Tentatives de défauts par heuristique
-def guess(cands):
-    for c in df_use.columns:
-        lc = c.lower()
-        for cand in cands:
-            if cand in lc:
-                return c
-    return None
+# Defaults per your mapping
+default_photo = "linkedinprofileImageurl" if "linkedinprofileImageurl" in df_use.columns else None
+default_company = "companyName" if "companyName" in df_use.columns else None
 
-col_first = pick("First Name", guess(["first name","firstname","first_name","given name"]))
-col_last = pick("Last Name", guess(["last name","lastname","last_name","family name","surname"]))
-col_full = pick("Full Name (optionnel)", guess(["full name","fullname","name"]))
-col_company = pick("Company", guess(["company","company name","employer","organization","org name"]))
-col_job = pick("Job / Title", guess(["job","job title","title","position","role","headline"]))
-col_photo = pick("Photo URL", guess(["profile image url","profile picture","image url","photo url","picture url","avatar","img"]))
-col_location = pick("Location", guess(["location","city","country","region"]))
+col_first = pick("First Name", "firstName" if "firstName" in df_use.columns else None)
+col_last = pick("Last Name", "lastName" if "lastName" in df_use.columns else None)
+col_full = pick("Full Name (optionnel)", None)  # a supprimer -> None
+col_company = pick("Company", default_company)
+col_job = pick("Job / Title", "linkedinHeadline" if "linkedinHeadline" in df_use.columns else None)
+col_photo = pick("Photo URL", default_photo)
+col_location = pick("Location", "linkedinJobLocation" if "linkedinJobLocation" in df_use.columns else None)
 
-# Update KPIs with company uniques if mapped
 if col_company != "—":
     colK2.metric("Entreprises uniques", f"{df_use[col_company].nunique():,}")
-# Followers / Employees moy. si présentes
-followers_col = guess(["followers count","followers","follower count"])
-employees_col = guess(["employee count","employees","employee counts","company employees"])
-if followers_col:
-    s = pd.to_numeric(df_use[followers_col], errors="coerce")
-    if s.notna().any():
-        colK3.metric("Followers (moy.)", f"{float(s.mean()):,.0f}")
-if employees_col:
-    s = pd.to_numeric(df_use[employees_col], errors="coerce")
-    if s.notna().any():
-        colK4.metric("Employés (moy.)", f"{float(s.mean()):,.0f}")
 
-# -------- Top filters (num/cat spécifiques)
+# -------- Top filters (custom labels + remove employees count)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
-def add_numeric_slider(label, series, key_name):
+
+# Identify columns for filters (fr labels override)
+followers_col = None
+connections_col = None
+company_size_col = None
+company_founded_col = None
+
+for c in df_use.columns:
+    lc = c.lower()
+    if followers_col is None and ("followerscount" in lc or lc.endswith("followers") or "followers count" in lc):
+        followers_col = c
+    if connections_col is None and ("connection" in lc or "connexion" in lc):
+        connections_col = c
+    if company_size_col is None and ("companysize" in lc or "company size" in lc or lc == "size"):
+        company_size_col = c
+    if company_founded_col is None and ("companyfounded" in lc or "founded" in lc):
+        company_founded_col = c
+
+# Numeric slider that treats NaN as pass-through
+def add_numeric_slider(label_fr, series, key_name):
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().any():
         lo, hi = float(np.nanmin(s)), float(np.nanmax(s))
         if lo != hi:
-            v = st.slider(prettify_label(label), lo, hi, (lo, hi))
-            top_filters[key_name] = ("num_range", v)
+            v = st.slider(label_fr, lo, hi, (lo, hi))
+            top_filters[key_name] = ("num_range_nanpass", v)
 
-def add_categorical_multiselect(label, series, key_name, max_unique=50):
+# Categorical multiselect
+def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
     uniques = series.dropna().astype(str).unique()
     if 1 <= len(uniques) <= max_unique:
-        v = st.multiselect(prettify_label(label), sorted(map(str, uniques)))
+        v = st.multiselect(label_fr, sorted(map(str, uniques)))
         if v:
             top_filters[key_name] = ("in", set(v))
 
-# Let user choose how many cards per row
-cards_per_row = st.selectbox("Cartes par ligne", [3, 4, 6], index=1)
-
-# Specific filters per your request
-company_followers_col = guess(["company followers count","company followers","org followers"])
-followers_col = followers_col
-connections_col = guess(["connection count","connections","connexion count"])
-employees_col = employees_col
-company_size_col = guess(["company size","size","organization size"])
-company_founded_col = guess(["company founded","founded","founded year","foundation year","year founded"])
-
 cols_top = st.columns(3)
 with cols_top[0]:
-    if company_followers_col and company_followers_col in df_use:
-        add_numeric_slider(company_followers_col, df_use[company_followers_col], company_followers_col)
     if followers_col and followers_col in df_use:
-        add_numeric_slider(followers_col, df_use[followers_col], followers_col)
+        add_numeric_slider("Nombre de followers", df_use[followers_col], followers_col)
 with cols_top[1]:
     if connections_col and connections_col in df_use:
-        add_numeric_slider(connections_col, df_use[connections_col], connections_col)
-    if employees_col and employees_col in df_use:
-        add_numeric_slider(employees_col, df_use[employees_col], employees_col)
+        add_numeric_slider("Nombre de connexions", df_use[connections_col], connections_col)
 with cols_top[2]:
     if company_size_col and company_size_col in df_use:
-        add_categorical_multiselect(company_size_col, df_use[company_size_col], company_size_col, max_unique=50)
+        add_categorical_multiselect("Taille de l'entreprise", df_use[company_size_col], company_size_col, max_unique=50)
     if company_founded_col and company_founded_col in df_use:
-        add_numeric_slider(company_founded_col, df_use[company_founded_col], company_founded_col)
+        add_numeric_slider("Création de l'entreprise", df_use[company_founded_col], company_founded_col)
 
 # -------- Sidebar: only text search filters
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
-# candidate text columns (excluding numeric/datetime and already filtered ones)
+skip_cols = set([c for c in [followers_col, connections_col, company_size_col, company_founded_col] if c])
 candidates_text = []
-skip_cols = set([c for c in [company_followers_col, followers_col, connections_col, employees_col, company_size_col, company_founded_col] if c])
 for c in df_use.columns:
     if c in skip_cols:
         continue
@@ -202,10 +191,11 @@ def apply_all_filters(df_in: pd.DataFrame):
         if col_key not in df_out:
             continue
         s = df_out[col_key]
-        if ftype == "num_range":
+        if ftype == "num_range_nanpass":
             s_num = pd.to_numeric(s, errors="coerce")
             lo, hi = val
-            mask &= s_num.between(lo, hi)
+            rng_mask = s_num.between(lo, hi)
+            mask &= (rng_mask | s_num.isna())  # NaN passes
         elif ftype == "in":
             mask &= s.astype(str).isin(val)
     for col_key, (ftype, val) in text_filters.items():
@@ -224,14 +214,41 @@ total_rows = len(filtered)
 total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
 page = st.sidebar.number_input("Page", min_value=1, max_value=max(1, total_pages), value=1, step=1)
 start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
+
+# Header count reflects filtered rows
 st.markdown(f"**{total_rows:,} leads** après filtres • Page **{page}/{total_pages}**")
 
-# -------- Grid Card View
+# -------- Card Grid with CSS borders
 st.markdown("### 🧾 Résultats")
+
+st.markdown(
+    """
+    <style>
+    .lead-card {
+        border: 1px solid rgba(0,0,0,0.1);
+        border-radius: 12px;
+        padding: 12px;
+        height: 100%;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .lead-card img {
+        border-radius: 10px;
+        width: 100%;
+        height: auto;
+        object-fit: cover;
+    }
+    .lead-name { font-weight: 700; margin-top: 6px; }
+    .lead-sub { color: rgba(49,51,63,0.7); font-size: 0.95rem; }
+    .lead-loc { color: rgba(49,51,63,0.6); font-size: 0.85rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 subset = filtered.iloc[start:end]
+cards_per_row = st.selectbox("Cartes par ligne", [3, 4, 6], index=1, key="cards_per_row_selector")
 
 def get_display_name(row):
-    # Priority: First + Last, else Full Name, else fallback
     parts = []
     if col_first != "—" and pd.notna(row.get(col_first, np.nan)) and str(row.get(col_first)).strip():
         parts.append(str(row[col_first]).strip())
@@ -239,7 +256,7 @@ def get_display_name(row):
         parts.append(str(row[col_last]).strip())
     if parts:
         return " ".join(parts)
-    if col_full != "—" and pd.notna(row.get(col_full, np.nan)) and str(row.get(col_full)).strip():
+    if col_full and col_full != "—" and pd.notna(row.get(col_full, np.nan)) and str(row.get(col_full)).strip():
         return str(row[col_full]).strip()
     return "(Sans nom)"
 
@@ -250,35 +267,42 @@ def get_company_job(row):
         return f"{comp} — {job}"
     return comp or job or ""
 
-# Build rows of columns
+def render_card(rec):
+    # Image
+    img_html = ""
+    if col_photo != "—":
+        img = rec.get(col_photo)
+        if isinstance(img, str) and looks_like_url(img):
+            img_html = f'<img src="{img}" alt="photo">'
+    if not img_html:
+        # Placeholder
+        img_html = '<div style="width:100%;aspect-ratio:1.8;background:rgba(0,0,0,0.03);border-radius:10px;"></div>'
+    name = get_display_name(rec)
+    sub = get_company_job(rec)
+    loc = ""
+    if col_location != "—" and pd.notna(rec.get(col_location, np.nan)):
+        loc = f'<div class="lead-loc">{str(rec[col_location])}</div>'
+    html = f'''
+        <div class="lead-card">
+            {img_html}
+            <div class="lead-name">{name}</div>
+            <div class="lead-sub">{sub}</div>
+            {loc}
+        </div>
+    '''
+    st.markdown(html, unsafe_allow_html=True)
+
+# Build grid
 rows = []
-cards = list(subset.to_dict(orient="records"))
-for i in range(0, len(cards), cards_per_row):
-    rows.append(cards[i:i+cards_per_row])
+recs = list(subset.to_dict(orient="records"))
+for i in range(0, len(recs), cards_per_row):
+    rows.append(recs[i:i+cards_per_row])
 
 for row in rows:
     cols = st.columns(cards_per_row, gap="large")
     for col, rec in zip(cols, row):
         with col:
-            # Image on top (if valid URL)
-            if col_photo != "—":
-                img = rec.get(col_photo)
-                if isinstance(img, str) and looks_like_url(img):
-                    try:
-                        st.image(img, use_container_width=True)
-                    except Exception:
-                        st.write("")
-                else:
-                    st.write("")
-            # Title: Lead Name
-            st.markdown(f"**{get_display_name(rec)}**")
-            # Subtitle: Company — Job (no dates)
-            cj = get_company_job(rec)
-            if cj:
-                st.caption(cj)
-            # Location (optional)
-            if col_location != "—" and pd.notna(rec.get(col_location, np.nan)):
-                st.caption(str(rec[col_location]))
+            render_card(rec)
 
 # -------- Export & Stats table
 st.download_button("⬇️ Télécharger le CSV filtré", data=filtered.to_csv(index=False).encode("utf-8"),
