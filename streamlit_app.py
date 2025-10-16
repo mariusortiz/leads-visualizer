@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from urllib.parse import urlparse
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
@@ -43,7 +42,7 @@ def read_csv_any(uploaded) -> pd.DataFrame:
 
 # ---------- UI
 st.title("📇 Lead Manager")
-st.caption("Liste simple + filtres + pagination (emails obligatoires)")
+st.caption("Liste + filtres + pagination (emails obligatoires)")
 
 uploaded = st.file_uploader("Déposez votre fichier CSV", type=["csv"])
 if uploaded is None:
@@ -52,7 +51,7 @@ if uploaded is None:
 
 df = read_csv_any(uploaded)
 
-# --- Colonnes principales (détection robuste)
+# --- Colonnes principales
 col_first = find_col(df, ["firstName", "first_name", "firstname", "given name", "givenName"])
 col_last = find_col(df, ["lastName", "last_name", "lastname", "family name", "surname"])
 col_company = find_col(df, ["companyName", "company name", "company", "employer"])
@@ -60,11 +59,11 @@ col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "p
 col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
 col_email = find_col(df, ["email", "mail", "emailaddress", "contact email"])
 
-# --- Filtre automatique: ne garder que les lignes avec un email valide
+# --- Filtre email obligatoire
 if col_email:
     df = df[df[col_email].astype(str).str.contains("@", na=False)]
 else:
-    st.error("Aucune colonne email détectée (email/mail). Impossible de continuer sans email.")
+    st.error("Aucune colonne email détectée (email/mail).")
     st.stop()
 
 # --- Stats
@@ -74,7 +73,7 @@ c1.metric("Leads (emails valides)", f"{len(df):,}")
 if col_company:
     c2.metric("Entreprises uniques", f"{df[col_company].nunique():,}")
 
-# --- Détection colonnes pour filtres principaux
+# --- Filtres détectés
 followers_col = None
 connections_col = None
 company_size_col = None
@@ -91,12 +90,13 @@ for c in df.columns:
     if company_founded_col is None and ("companyfounded" in lc or "founded" in lc or "foundation year" in lc):
         company_founded_col = c
 
-# === Sidebar: Pagination en HAUT ===
+# === Sidebar: Pagination en HAUT + navigation
 st.sidebar.header("🧭 Pagination")
-default_page_size = 24
-page_size = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96], index=[12,24,48,96].index(default_page_size), key="page_size")
+page_size_choice = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96, "TOUT"], index=1, key="page_size_choice")
+if "page_num" not in st.session_state:
+    st.session_state.page_num = 1
 
-# --- Filtres principaux (3 colonnes, en page principale)
+# --- Filtres principaux (3 colonnes)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
 
@@ -134,7 +134,7 @@ if company_founded_col:
         add_numeric_slider("Création de l'entreprise", df[company_founded_col], company_founded_col)
     i += 1
 
-# --- Sidebar: Filtres texte (sous la pagination)
+# --- Sidebar: Filtres texte
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
 skip_cols = {x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x}
@@ -171,51 +171,40 @@ def apply_all_filters(df_in: pd.DataFrame):
 
 filtered = apply_all_filters(df)
 
-# --- Calcul pagination (après filtres)
+# --- Calcul pagination
 total_rows = len(filtered)
-total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
-page = st.sidebar.number_input("Page", min_value=1, max_value=max(1, total_pages), value=1, step=1, key="page_num")
+if page_size_choice == "TOUT":
+    page_size = total_rows if total_rows > 0 else 1
+    total_pages = 1
+    st.session_state.page_num = 1
+else:
+    page_size = int(page_size_choice)
+    total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
+
+# Prev / Next buttons
+cprev, cpage, cnext = st.sidebar.columns([1, 2, 1])
+with cprev:
+    if st.button("◀", disabled=(st.session_state.page_num <= 1)):
+        st.session_state.page_num = max(1, st.session_state.page_num - 1)
+with cpage:
+    st.number_input("Page", min_value=1, max_value=max(1, total_pages), value=st.session_state.page_num, step=1, key="page_num_input")
+    st.session_state.page_num = st.session_state.page_num_input
+with cnext:
+    if st.button("▶", disabled=(st.session_state.page_num >= total_pages)):
+        st.session_state.page_num = min(total_pages, st.session_state.page_num + 1)
+
+page = st.session_state.page_num
 start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
 st.caption(f"{total_rows:,} leads après filtres • Page {page}/{total_pages}")
 
-# --- Affichage en liste
+# --- UI List stylée
 st.markdown("### 🧾 Résultats")
-subset = filtered.iloc[start:end].copy()
-
-def line_for_row(row):
-    # First Last
-    parts = []
-    if col_first and pd.notna(row.get(col_first, None)):
-        parts.append(str(row[col_first]).strip())
-    if col_last and pd.notna(row.get(col_last, None)):
-        parts.append(str(row[col_last]).strip())
-    name = " ".join(parts) if parts else "(Sans nom)"
-    # Company - Job
-    company = str(row[col_company]).strip() if col_company and pd.notna(row.get(col_company, None)) else ""
-    job = str(row[col_job]).strip() if col_job and pd.notna(row.get(col_job, None)) else ""
-    company_job = f"{company} - {job}" if (company or job) else ""
-    # Email
-    email = str(row[col_email]).strip() if col_email and pd.notna(row.get(col_email, None)) else ""
-    # Location
-    loc = str(row[col_location]).strip() if col_location and pd.notna(row.get(col_location, None)) else ""
-    return f"{name} | {company_job} | {email} | {loc}"
-
-for _, r in subset.iterrows():
-    st.write(line_for_row(r))
-
-# --- Export CSV
-st.download_button(
-    "⬇️ Télécharger le CSV filtré",
-    data=filtered.to_csv(index=False).encode("utf-8"),
-    file_name="leads_filtres.csv",
-    mime="text/csv",
-)
-
-st.markdown("""
+st.markdown(
+    """
     <style>
     .list-header, .list-row {
         display: grid;
-        grid-template-columns: 1.2fr 2fr 1.6fr 1.2fr;
+        grid-template-columns: 28% 42% 20% 10%;
         gap: 12px;
         align-items: baseline;
         padding: 10px 12px;
@@ -232,4 +221,51 @@ st.markdown("""
     .muted { color: rgba(49,51,63,0.6); }
     a { text-decoration: none; }
     </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
+
+def safe_str(x):
+    return "" if pd.isna(x) else str(x)
+
+def render_row(row):
+    first = safe_str(row.get(col_first)) if col_first else ""
+    last = safe_str(row.get(col_last)) if col_last else ""
+    name = (first + " " + last).strip() or "(Sans nom)"
+    company = safe_str(row.get(col_company)) if col_company else ""
+    job = safe_str(row.get(col_job)) if col_job else ""
+    company_job = " — ".join([s for s in [company, job] if s])
+    email = safe_str(row.get(col_email))
+    email_html = f'<a href="mailto:{email}">{email}</a>' if "@" in email else ""
+    loc = safe_str(row.get(col_location)) if col_location else ""
+    html = f'''
+    <div class="list-row">
+        <div><strong>{name}</strong></div>
+        <div>{company_job}</div>
+        <div>{email_html}</div>
+        <div class="muted">{loc}</div>
+    </div>
+    '''
+    st.markdown(html, unsafe_allow_html=True)
+
+# Header
+st.markdown(
+    '''
+    <div class="list-header">
+        <div>Nom</div><div>Entreprise — Poste</div><div>Email</div><div>Localisation</div>
+    </div>
+    ''',
+    unsafe_allow_html=True
+)
+
+subset = filtered.iloc[start:end]
+for _, r in subset.iterrows():
+    render_row(r)
+
+# --- Export CSV
+st.download_button(
+    "⬇️ Télécharger le CSV filtré",
+    data=filtered.to_csv(index=False).encode("utf-8"),
+    file_name="leads_filtres.csv",
+    mime="text/csv",
+)
