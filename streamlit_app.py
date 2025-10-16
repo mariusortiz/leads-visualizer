@@ -210,3 +210,26 @@ st.download_button(
     file_name="leads_filtres.csv",
     mime="text/csv",
 )
+
+st.markdown("""
+    <style>
+    .list-header, .list-row {
+        display: grid;
+        grid-template-columns: 1.2fr 2fr 1.6fr 1.2fr;
+        gap: 12px;
+        align-items: baseline;
+        padding: 10px 12px;
+    }
+    .list-header {
+        border-bottom: 2px solid rgba(0,0,0,0.08);
+        font-weight: 700;
+        color: rgba(49,51,63,0.8);
+        margin-bottom: 4px;
+    }
+    .list-row {
+        border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+    .muted { color: rgba(49,51,63,0.6); }
+    a { text-decoration: none; }
+    </style>
+""", unsafe_allow_html=True)
