@@ -19,12 +19,14 @@ def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if df[col].dtype == object:
             sample = df[col].dropna().head(50).astype(str)
-            # Heuristic: contains date-like characters
             if sample.str.contains(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4}", regex=True).mean() > 0.5:
                 try:
-                    df[col] = pd.to_datetime(df[col], errors="coerce", infer_datetime_format=True)
+                    df[col] = pd.to_datetime(df[col], errors="coerce", infer_datetime_format=True, utc=False)
                 except Exception:
                     pass
+        # Si la colonne est déjà en datetime avec timezone, on la convertit en naïve (sans tz)
+        if pd.api.types.is_datetime64tz_dtype(df[col]):
+            df[col] = df[col].dt.tz_localize(None)
     return df
 
 def build_filters(df: pd.DataFrame):
