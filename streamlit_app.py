@@ -96,6 +96,7 @@ page_size_choice = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96, "TOUT
 if "page_num" not in st.session_state:
     st.session_state.page_num = 1
 
+
 # --- Filtres principaux (3 colonnes)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
@@ -115,26 +116,27 @@ def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
         if v:
             top_filters[key_name] = ("in", set(v))
 
-cols_top = st.columns(3, gap="large")
-i = 0
+# Build the list of available filters in desired order
+_filter_specs = []
 if followers_col:
-    with cols_top[i % 3]:
-        add_numeric_slider("Nombre de followers", df[followers_col], followers_col)
-    i += 1
+    _filter_specs.append(("Nombre de followers", followers_col, "num"))
 if connections_col:
-    with cols_top[i % 3]:
-        add_numeric_slider("Nombre de connexions", df[connections_col], connections_col)
-    i += 1
+    _filter_specs.append(("Nombre de connexions", connections_col, "num"))
 if company_size_col:
-    with cols_top[i % 3]:
-        add_categorical_multiselect("Taille de l'entreprise", df[company_size_col], company_size_col, max_unique=50)
-    i += 1
+    _filter_specs.append(("Taille de l'entreprise", company_size_col, "cat"))
 if company_founded_col:
-    with cols_top[i % 3]:
-        add_numeric_slider("Création de l'entreprise", df[company_founded_col], company_founded_col)
-    i += 1
+    _filter_specs.append(("Création de l'entreprise", company_founded_col, "num"))
+
+cols_top = st.columns(3, gap="large")
+for idx, (label, colname, kind) in enumerate(_filter_specs):
+    with cols_top[idx % 3]:
+        if kind == "num":
+            add_numeric_slider(label, df[colname], colname)
+        else:
+            add_categorical_multiselect(label, df[colname], colname, max_unique=50)
 
 # --- Sidebar: Filtres texte
+
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
 skip_cols = {x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x}
