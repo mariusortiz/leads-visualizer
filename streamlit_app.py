@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from urllib.parse import urlparse
+import requests
+import io
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
@@ -43,6 +45,24 @@ def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
 def looks_like_url(s: str) -> bool:
     if not isinstance(s, str) or not s:
         return False
+
+
+@st.cache_data(show_spinner=False)
+def fetch_image_bytes(url: str):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+            "Referer": "https://www.linkedin.com/",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        r = requests.get(url, headers=headers, timeout=6)
+        if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
+            # Limit size to ~5MB
+            content = r.content[:5*1024*1024]
+            return content
+    except Exception:
+        return None
+    return None
     if s.startswith("urn:"):
         return False
     try:
@@ -233,27 +253,39 @@ def get_company_job(row):
     job = str(row[col_job]).strip() if col_job and pd.notna(row.get(col_job, np.nan)) else ""
     return f"{comp} — {job}" if comp and job else (comp or job or "")
 
+
 def render_card(rec):
     img_html = ""
     if col_photo:
         img = rec.get(col_photo)
         if isinstance(img, str) and looks_like_url(img):
-            # LinkedIn media URLs expire parfois mais chargeables si publiques
-            img_html = f'<img src="{img}" alt="photo">'
+            # Try server-side fetch first to bypass client CORS/cookies
+            data = fetch_image_bytes(img)
+            if data:
+                st.image(io.BytesIO(data), use_container_width=True)
+            else:
+                # Fallback to client-side <img> (may still work)
+                img_html = f'<img src="{img}" alt="photo">'
     if not img_html:
-        img_html = '<div style="width:100%;aspect-ratio:1.8;background:rgba(0,0,0,0.03);border-radius:10px;"></div>'
+        # We either drew with st.image already, or need placeholder
+        if 'data' in locals() and data:
+            pass
+        else:
+            img_html = '<div style="width:100%;aspect-ratio:1.8;background:rgba(0,0,0,0.03);border-radius:10px;"></div>'
+            st.markdown(img_html, unsafe_allow_html=True)
+
     name = get_display_name(rec)
     sub = get_company_job(rec)
     loc = f'<div class="lead-loc">{rec[col_location]}</div>' if col_location and pd.notna(rec.get(col_location)) else ""
     html = f'''
         <div class="lead-card">
-            {img_html}
             <div class="lead-name">{name}</div>
             <div class="lead-sub">{sub}</div>
             {loc}
         </div>
     '''
     st.markdown(html, unsafe_allow_html=True)
+
 
 rows = []
 recs = list(subset.to_dict(orient="records"))
