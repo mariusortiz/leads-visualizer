@@ -2,9 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
-import requests
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
@@ -18,6 +16,23 @@ def prettify_label(s: str) -> str:
     s = " ".join(s.split())
     return s.strip().title()
 
+def find_col(df: pd.DataFrame, candidates) -> str | None:
+    if df is None or df.empty:
+        return None
+    cmap = {c.lower(): c for c in df.columns}
+    # exact match
+    for cand in candidates:
+        lc = cand.lower()
+        if lc in cmap:
+            return cmap[lc]
+    # contains
+    for cand in candidates:
+        lc = cand.lower()
+        for k, real in cmap.items():
+            if lc in k:
+                return real
+    return None
+
 @st.cache_data(show_spinner=False)
 def read_csv_any(uploaded) -> pd.DataFrame:
     try:
@@ -26,41 +41,9 @@ def read_csv_any(uploaded) -> pd.DataFrame:
         uploaded.seek(0)
         return pd.read_csv(uploaded, low_memory=False)
 
-@st.cache_data(show_spinner=False)
-def fetch_image_bytes(url: str):
-    """Télécharge une image côté serveur avec des entêtes proches d’un vrai navigateur."""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-            "Referer": "https://www.linkedin.com/",
-            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        }
-        r = requests.get(url, headers=headers, timeout=6)
-        if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
-            return r.content
-    except Exception:
-        return None
-    return None
-
-def weserv_proxy(url: str) -> str:
-    """Proxy via images.weserv.nl pour contourner certains blocages."""
-    safe = quote(url, safe=":/%?#[]@!$&'()*+,;=")
-    return f"https://images.weserv.nl/?url={safe}"
-
-def looks_like_url(s: str) -> bool:
-    if not isinstance(s, str) or not s:
-        return False
-    if s.startswith("urn:"):
-        return False
-    try:
-        u = urlparse(s)
-        return u.scheme in ("http", "https") and bool(u.netloc)
-    except Exception:
-        return False
-
 # ---------- UI
 st.title("📇 Lead Manager")
-st.caption("Affichage cartes + filtres (haut et barre latérale)")
+st.caption("Liste simple + filtres + pagination (emails obligatoires)")
 
 uploaded = st.file_uploader("Déposez votre fichier CSV", type=["csv"])
 if uploaded is None:
@@ -69,22 +52,29 @@ if uploaded is None:
 
 df = read_csv_any(uploaded)
 
-# --- Colonnes fixes selon ton fichier
-col_first = "firstName" if "firstName" in df.columns else None
-col_last = "lastName" if "lastName" in df.columns else None
-col_company = "companyName" if "companyName" in df.columns else None
-col_job = "linkedinHeadline" if "linkedinHeadline" in df.columns else None
-col_photo = "linkedinProfileImageUrl" if "linkedinProfileImageUrl" in df.columns else None
-col_location = "linkedinJobLocation" if "linkedinJobLocation" in df.columns else None
+# --- Colonnes principales (détection robuste)
+col_first = find_col(df, ["firstName", "first_name", "firstname", "given name", "givenName"])
+col_last = find_col(df, ["lastName", "last_name", "lastname", "family name", "surname"])
+col_company = find_col(df, ["companyName", "company name", "company", "employer"])
+col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "position", "role"])
+col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
+col_email = find_col(df, ["email", "mail", "emailaddress", "contact email"])
 
-# --- Statistiques
+# --- Filtre automatique: ne garder que les lignes avec un email valide
+if col_email:
+    df = df[df[col_email].astype(str).str.contains("@", na=False)]
+else:
+    st.error("Aucune colonne email détectée (email/mail). Impossible de continuer sans email.")
+    st.stop()
+
+# --- Stats
 st.markdown("### 📈 Statistiques")
 c1, c2 = st.columns(2)
-c1.metric("Leads (total)", f"{len(df):,}")
+c1.metric("Leads (emails valides)", f"{len(df):,}")
 if col_company:
     c2.metric("Entreprises uniques", f"{df[col_company].nunique():,}")
 
-# --- Détection des colonnes pour filtres principaux
+# --- Détection colonnes pour filtres principaux
 followers_col = None
 connections_col = None
 company_size_col = None
@@ -101,7 +91,12 @@ for c in df.columns:
     if company_founded_col is None and ("companyfounded" in lc or "founded" in lc or "foundation year" in lc):
         company_founded_col = c
 
-# --- Filtres principaux (3 colonnes)
+# === Sidebar: Pagination en HAUT ===
+st.sidebar.header("🧭 Pagination")
+default_page_size = 24
+page_size = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96], index=[12,24,48,96].index(default_page_size), key="page_size")
+
+# --- Filtres principaux (3 colonnes, en page principale)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
 
@@ -121,20 +116,25 @@ def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
             top_filters[key_name] = ("in", set(v))
 
 cols_top = st.columns(3, gap="large")
-filter_specs = []
-if followers_col:        filter_specs.append(("Nombre de followers", followers_col, "num"))
-if connections_col:      filter_specs.append(("Nombre de connexions", connections_col, "num"))
-if company_size_col:     filter_specs.append(("Taille de l'entreprise", company_size_col, "cat"))
-if company_founded_col:  filter_specs.append(("Création de l'entreprise", company_founded_col, "num"))
-
-for i, (label, colname, kind) in enumerate(filter_specs):
+i = 0
+if followers_col:
     with cols_top[i % 3]:
-        if kind == "num":
-            add_numeric_slider(label, df[colname], colname)
-        else:
-            add_categorical_multiselect(label, df[colname], colname, max_unique=50)
+        add_numeric_slider("Nombre de followers", df[followers_col], followers_col)
+    i += 1
+if connections_col:
+    with cols_top[i % 3]:
+        add_numeric_slider("Nombre de connexions", df[connections_col], connections_col)
+    i += 1
+if company_size_col:
+    with cols_top[i % 3]:
+        add_categorical_multiselect("Taille de l'entreprise", df[company_size_col], company_size_col, max_unique=50)
+    i += 1
+if company_founded_col:
+    with cols_top[i % 3]:
+        add_numeric_slider("Création de l'entreprise", df[company_founded_col], company_founded_col)
+    i += 1
 
-# --- Filtres texte en sidebar (keys uniques)
+# --- Sidebar: Filtres texte (sous la pagination)
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
 skip_cols = {x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x}
@@ -143,17 +143,14 @@ for c in df.columns:
         continue
     if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_datetime64_any_dtype(df[c]):
         continue
-    if c == col_photo:
-        continue
     val = st.sidebar.text_input(prettify_label(c), "", key=f"txt_{c}")
     if val:
         text_filters[c] = ("contains", val.lower())
 
-# --- Application des filtres
+# --- Appliquer les filtres
 def apply_all_filters(df_in: pd.DataFrame):
     df_out = df_in.copy()
     mask = pd.Series([True] * len(df_out), index=df_out.index)
-    # top filters
     for col_key, (ftype, val) in top_filters.items():
         if col_key not in df_out:
             continue
@@ -162,10 +159,9 @@ def apply_all_filters(df_in: pd.DataFrame):
             s_num = pd.to_numeric(s, errors="coerce")
             lo, hi = val
             rng = s_num.between(lo, hi)
-            mask &= (rng | s_num.isna())  # NaN passent
+            mask &= (rng | s_num.isna())
         elif ftype == "in":
             mask &= s.astype(str).isin(val)
-    # text filters
     for col_key, (ftype, val) in text_filters.items():
         if col_key not in df_out:
             continue
@@ -175,86 +171,39 @@ def apply_all_filters(df_in: pd.DataFrame):
 
 filtered = apply_all_filters(df)
 
-# --- Pagination
-st.sidebar.header("🧭 Pagination")
-page_size = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96], index=1, key="page_size")
+# --- Calcul pagination (après filtres)
 total_rows = len(filtered)
 total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
 page = st.sidebar.number_input("Page", min_value=1, max_value=max(1, total_pages), value=1, step=1, key="page_num")
 start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
+st.caption(f"{total_rows:,} leads après filtres • Page {page}/{total_pages}")
 
-st.markdown(f"**{total_rows:,} leads** après filtres • Page **{page}/{total_pages}**")
-
-
-# --- Résultats (cards)
+# --- Affichage en liste
 st.markdown("### 🧾 Résultats")
+subset = filtered.iloc[start:end].copy()
 
-st.markdown(
-    """
-    <style>
-    .lead-card {
-        border: 1px solid rgba(0,0,0,0.1);
-        border-radius: 12px;
-        padding: 12px;
-        height: 100%;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-    }
-    .lead-name { font-weight: 700; margin-top: 6px; }
-    .lead-sub { color: rgba(49,51,63,0.7); font-size: 0.95rem; }
-    .lead-loc { color: rgba(49,51,63,0.6); font-size: 0.85rem; }
-    </style>
-    """, unsafe_allow_html=True
-)
-
-cards_per_row = st.selectbox("Cartes par ligne", [3, 4, 6], index=1, key="cards_per_row_selector")
-
-def get_display_name(row):
+def line_for_row(row):
+    # First Last
     parts = []
-    if col_first and pd.notna(row.get(col_first, np.nan)):
+    if col_first and pd.notna(row.get(col_first, None)):
         parts.append(str(row[col_first]).strip())
-    if col_last and pd.notna(row.get(col_last, np.nan)):
+    if col_last and pd.notna(row.get(col_last, None)):
         parts.append(str(row[col_last]).strip())
-    return " ".join(parts) if parts else "(Sans nom)"
+    name = " ".join(parts) if parts else "(Sans nom)"
+    # Company - Job
+    company = str(row[col_company]).strip() if col_company and pd.notna(row.get(col_company, None)) else ""
+    job = str(row[col_job]).strip() if col_job and pd.notna(row.get(col_job, None)) else ""
+    company_job = f"{company} - {job}" if (company or job) else ""
+    # Email
+    email = str(row[col_email]).strip() if col_email and pd.notna(row.get(col_email, None)) else ""
+    # Location
+    loc = str(row[col_location]).strip() if col_location and pd.notna(row.get(col_location, None)) else ""
+    return f"{name} | {company_job} | {email} | {loc}"
 
-def render_card(rec):
-    st.markdown('<div class="lead-card">', unsafe_allow_html=True)
+for _, r in subset.iterrows():
+    st.write(line_for_row(r))
 
-    # Image
-    if col_photo and pd.notna(rec.get(col_photo, None)) and looks_like_url(str(rec[col_photo])):
-        url = str(rec[col_photo])
-        data = fetch_image_bytes(url)
-        if data:
-            st.image(io.BytesIO(data), use_container_width=True)
-        else:
-            st.image(weserv_proxy(url), use_container_width=True)
-    else:
-        st.markdown('<div style="width:100%;aspect-ratio:1.8;background:#f0f0f0;border-radius:10px;"></div>', unsafe_allow_html=True)
-
-    # Texte
-    name = get_display_name(rec)
-    company = str(rec[col_company]) if col_company and pd.notna(rec.get(col_company)) else ""
-    job = str(rec[col_job]) if col_job and pd.notna(rec.get(col_job)) else ""
-    location = str(rec[col_location]) if col_location and pd.notna(rec.get(col_location)) else ""
-
-    st.markdown(f"**{name}**")
-    st.caption(f"{company} — {job}" if company or job else "")
-    st.caption(location)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# Grille
-subset = filtered.iloc[start:end]
-rows = []
-recs = list(subset.to_dict(orient="records"))
-for i in range(0, len(recs), cards_per_row):
-    rows.append(recs[i:i + cards_per_row])
-
-for row in rows:
-    cols = st.columns(cards_per_row)
-    for col, rec in zip(cols, row):
-        with col:
-            render_card(rec)
-
-# Export
+# --- Export CSV
 st.download_button(
     "⬇️ Télécharger le CSV filtré",
     data=filtered.to_csv(index=False).encode("utf-8"),
