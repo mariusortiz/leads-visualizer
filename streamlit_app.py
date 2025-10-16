@@ -109,10 +109,11 @@ if col_company != "—":
     colK2.metric("Entreprises uniques", f"{df_use[col_company].nunique():,}")
 
 # -------- Top filters (custom labels + remove employees count)
-st.markdown("### 🎛️ Filtres principaux")
+st.markdown("
+### 🎛️ Filtres principaux
 top_filters = {}
 
-# Identify columns for filters (fr labels override)
+# Identify columns for filters (labels FR)
 followers_col = None
 connections_col = None
 company_size_col = None
@@ -129,38 +130,42 @@ for c in df_use.columns:
     if company_founded_col is None and ("companyfounded" in lc or "founded" in lc):
         company_founded_col = c
 
-# Numeric slider that treats NaN as pass-through
+# Widgets helpers
 def add_numeric_slider(label_fr, series, key_name):
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().any():
         lo, hi = float(np.nanmin(s)), float(np.nanmax(s))
         if lo != hi:
-            v = st.slider(label_fr, lo, hi, (lo, hi))
+            v = st.slider(label_fr, lo, hi, (lo, hi), key=f"sl_{key_name}")
             top_filters[key_name] = ("num_range_nanpass", v)
 
-# Categorical multiselect
 def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
     uniques = series.dropna().astype(str).unique()
     if 1 <= len(uniques) <= max_unique:
-        v = st.multiselect(label_fr, sorted(map(str, uniques)))
+        v = st.multiselect(label_fr, sorted(map(str, uniques)), key=f"ms_{key_name}")
         if v:
             top_filters[key_name] = ("in", set(v))
 
-cols_top = st.columns(3)
-with cols_top[0]:
-    if followers_col and followers_col in df_use:
-        add_numeric_slider("Nombre de followers", df_use[followers_col], followers_col)
-with cols_top[1]:
-    if connections_col and connections_col in df_use:
-        add_numeric_slider("Nombre de connexions", df_use[connections_col], connections_col)
-with cols_top[2]:
-    if company_size_col and company_size_col in df_use:
-        add_categorical_multiselect("Taille de l'entreprise", df_use[company_size_col], company_size_col, max_unique=50)
-    if company_founded_col and company_founded_col in df_use:
-        add_numeric_slider("Création de l'entreprise", df_use[company_founded_col], company_founded_col)
+# Build the list of available filters (label, type, colname)
+filter_specs = []
+if followers_col and followers_col in df_use:
+    filter_specs.append(("Nombre de followers", "num", followers_col))
+if connections_col and connections_col in df_use:
+    filter_specs.append(("Nombre de connexions", "num", connections_col))
+if company_size_col and company_size_col in df_use:
+    filter_specs.append(("Taille de l'entreprise", "cat", company_size_col))
+if company_founded_col and company_founded_col in df_use:
+    filter_specs.append(("Création de l'entreprise", "num", company_founded_col))
 
-# -------- Sidebar: only text search filters
-st.sidebar.header("🔎 Recherche (texte)")
+cols = st.columns(3, gap="large")
+for idx, (label_fr, kind, colname) in enumerate(filter_specs):
+    with cols[idx % 3]:
+        if kind == "num":
+            add_numeric_slider(label_fr, df_use[colname], colname)
+        else:
+            add_categorical_multiselect(label_fr, df_use[colname], colname, max_unique=50)
+
+🔎 Recherche (texte)")
 text_filters = {}
 skip_cols = set([c for c in [followers_col, connections_col, company_size_col, company_founded_col] if c])
 candidates_text = []
