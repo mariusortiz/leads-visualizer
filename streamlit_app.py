@@ -2,31 +2,19 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from urllib.parse import urlparse
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
-# -------- Utils
+# ---------- Helpers
 def prettify_label(s: str) -> str:
     if not isinstance(s, str):
         return s
     s = s.replace("_", " ").replace("-", " ")
-    s = s.replace("linkedin", "").replace("Linkedin", "").replace("LinkedIn", "")
-    s = " ".join(s.split())  # collapse spaces
+    for k in ["linkedin", "LinkedIn", "Linkedin"]:
+        s = s.replace(k, "")
+    s = " ".join(s.split())
     return s.strip().title()
-
-def find_col(df: pd.DataFrame, candidates):
-    cols = {c.lower(): c for c in df.columns}
-    for cand in candidates:
-        lc = cand.lower()
-        # exact
-        if lc in cols:
-            return cols[lc]
-        # contains
-        for k in cols:
-            if lc in k:
-                return cols[k]
-    return None
 
 @st.cache_data(show_spinner=False)
 def read_csv_any(uploaded) -> pd.DataFrame:
@@ -52,32 +40,26 @@ def coerce_datetimes(df: pd.DataFrame) -> pd.DataFrame:
             pass
     return df
 
-# Columns to completely ignore in filters/display (case-insensitive contains match)
+def looks_like_url(s: str) -> bool:
+    if not isinstance(s, str) or not s:
+        return False
+    if s.startswith("urn:"):  # LinkedIn URN or similar
+        return False
+    try:
+        u = urlparse(s)
+        return u.scheme in ("http", "https") and bool(u.netloc)
+    except Exception:
+        return False
+
+# Columns to ignore in filters
 IGNORE_FILTERS = [
     "error", "company slug", "job date range", "profile image urn", "profile urn",
     "school urn", "school company slug", "mutual connections", "profile url",
     "scraper fullname", "school date range"
 ]
 
-# Semantic candidates for special fields
-CAND = {
-    "first_name": ["first name", "firstname", "first_name", "given name"],
-    "last_name": ["last name", "lastname", "last_name", "family name", "surname"],
-    "full_name": ["full name", "name", "profile name", "contact name"],
-    "company": ["company", "company name", "employer", "organization", "org name"],
-    "job": ["job", "job title", "title", "position", "role", "headline"],
-    "photo": ["profile image url", "profile picture url", "image url", "photo url", "picture url", "avatar"],
-    "followers": ["followers count", "followers", "follower count"],
-    "company_followers": ["company followers count", "company followers", "org followers"],
-    "connections": ["connection count", "connections", "connexion count"],
-    "employees": ["employee count", "employees", "employee counts", "company employees"],
-    "company_size": ["company size", "size", "organization size"],
-    "company_founded": ["company founded", "founded", "founded year", "foundation year", "year founded"],
-    "location": ["location", "city", "country", "region"]
-}
-
 st.title("📇 Lead Manager")
-st.caption("Filtres puissants + affichage en cartes + statistiques rapides")
+st.caption("Grille de cartes + filtres optimisés")
 
 uploaded = st.file_uploader("Déposez votre CSV ici", type=["csv"], accept_multiple_files=False)
 if uploaded is None:
@@ -87,114 +69,135 @@ if uploaded is None:
 df = read_csv_any(uploaded)
 df = coerce_datetimes(df)
 
-# Hide ignored columns entirely from display & filters (non-destructive: keep original for cards)
+# Filter out ignored columns
 def is_ignored(col: str) -> bool:
-    c = col.lower()
-    return any(x in c for x in IGNORE_FILTERS)
-
+    lc = col.lower()
+    return any(x in lc for x in IGNORE_FILTERS)
 usable_cols = [c for c in df.columns if not is_ignored(c)]
 df_use = df[usable_cols].copy()
 
-# Detect key columns
-key = {k: find_col(df_use, v) for k, v in CAND.items()}
+# -------- KPIs
+st.markdown("### 📈 Statistiques")
+colK1, colK2, colK3, colK4 = st.columns(4)
+colK1.metric("Leads (total)", f"{len(df_use):,}")
+# Entreprises uniques si colonne sélectionnée plus bas
 
-# ---------------- KPIs (top of page)
-# Compute a few robust stats
-unique_companies = df_use[key["company"]].nunique() if key["company"] else np.nan
-total_leads = len(df_use)
-# Use safe means
-def safe_mean(colname):
-    if not colname or colname not in df_use:
-        return np.nan
-    s = pd.to_numeric(df_use[colname], errors="coerce")
-    return float(s.mean()) if s.notna().any() else np.nan
+# -------- Mapping de colonnes (utilisateur)
+st.sidebar.header("🧩 Mapping des colonnes")
+def pick(label, default=None):
+    opts = ["—"] + list(df_use.columns)
+    idx = 0
+    if default in df_use.columns:
+        idx = opts.index(default) if default in opts else 0
+    return st.sidebar.selectbox(label, opts, index=idx)
 
-kpi_company_followers = safe_mean(key["company_followers"])
-kpi_employees = safe_mean(key["employees"])
-kpi_followers = safe_mean(key["followers"])
+# Tentatives de défauts par heuristique
+def guess(cands):
+    for c in df_use.columns:
+        lc = c.lower()
+        for cand in cands:
+            if cand in lc:
+                return c
+    return None
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Leads (total)", f"{total_leads:,}")
-col2.metric("Entreprises uniques", f"{int(unique_companies):,}" if pd.notna(unique_companies) else "—")
-col3.metric("Followers (moy.)", f"{kpi_followers:,.0f}" if pd.notna(kpi_followers) else "—")
-col4.metric("Employés (moy.)", f"{kpi_employees:,.0f}" if pd.notna(kpi_employees) else "—")
+col_first = pick("First Name", guess(["first name","firstname","first_name","given name"]))
+col_last = pick("Last Name", guess(["last name","lastname","last_name","family name","surname"]))
+col_full = pick("Full Name (optionnel)", guess(["full name","fullname","name"]))
+col_company = pick("Company", guess(["company","company name","employer","organization","org name"]))
+col_job = pick("Job / Title", guess(["job","job title","title","position","role","headline"]))
+col_photo = pick("Photo URL", guess(["profile image url","profile picture","image url","photo url","picture url","avatar","img"]))
+col_location = pick("Location", guess(["location","city","country","region"]))
 
-# ---------------- Top filters (numeric/date/categorical spécifiques)
+# Update KPIs with company uniques if mapped
+if col_company != "—":
+    colK2.metric("Entreprises uniques", f"{df_use[col_company].nunique():,}")
+# Followers / Employees moy. si présentes
+followers_col = guess(["followers count","followers","follower count"])
+employees_col = guess(["employee count","employees","employee counts","company employees"])
+if followers_col:
+    s = pd.to_numeric(df_use[followers_col], errors="coerce")
+    if s.notna().any():
+        colK3.metric("Followers (moy.)", f"{float(s.mean()):,.0f}")
+if employees_col:
+    s = pd.to_numeric(df_use[employees_col], errors="coerce")
+    if s.notna().any():
+        colK4.metric("Employés (moy.)", f"{float(s.mean()):,.0f}")
+
+# -------- Top filters (num/cat spécifiques)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
-
-# Numeric sliders helper
 def add_numeric_slider(label, series, key_name):
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().any():
         lo, hi = float(np.nanmin(s)), float(np.nanmax(s))
         if lo != hi:
-            v = st.slider(label, lo, hi, (lo, hi))
+            v = st.slider(prettify_label(label), lo, hi, (lo, hi))
             top_filters[key_name] = ("num_range", v)
 
-# Categorical multiselect helper
-def add_categorical_multiselect(label, series, key_name, max_unique=20):
+def add_categorical_multiselect(label, series, key_name, max_unique=50):
     uniques = series.dropna().astype(str).unique()
     if 1 <= len(uniques) <= max_unique:
-        v = st.multiselect(label, sorted(map(str, uniques)))
+        v = st.multiselect(prettify_label(label), sorted(map(str, uniques)))
         if v:
             top_filters[key_name] = ("in", set(v))
 
+# Let user choose how many cards per row
+cards_per_row = st.selectbox("Cartes par ligne", [3, 4, 6], index=1)
+
+# Specific filters per your request
+company_followers_col = guess(["company followers count","company followers","org followers"])
+followers_col = followers_col
+connections_col = guess(["connection count","connections","connexion count"])
+employees_col = employees_col
+company_size_col = guess(["company size","size","organization size"])
+company_founded_col = guess(["company founded","founded","founded year","foundation year","year founded"])
+
 cols_top = st.columns(3)
 with cols_top[0]:
-    if key["company_followers"]:
-        add_numeric_slider(prettify_label(key["company_followers"]), df_use[key["company_followers"]], key["company_followers"])
-    if key["followers"]:
-        add_numeric_slider(prettify_label(key["followers"]), df_use[key["followers"]], key["followers"])
+    if company_followers_col and company_followers_col in df_use:
+        add_numeric_slider(company_followers_col, df_use[company_followers_col], company_followers_col)
+    if followers_col and followers_col in df_use:
+        add_numeric_slider(followers_col, df_use[followers_col], followers_col)
 with cols_top[1]:
-    if key["connections"]:
-        add_numeric_slider(prettify_label(key["connections"]), df_use[key["connections"]], key["connections"])
-    if key["employees"]:
-        add_numeric_slider(prettify_label(key["employees"]), df_use[key["employees"]], key["employees"])
+    if connections_col and connections_col in df_use:
+        add_numeric_slider(connections_col, df_use[connections_col], connections_col)
+    if employees_col and employees_col in df_use:
+        add_numeric_slider(employees_col, df_use[employees_col], employees_col)
 with cols_top[2]:
-    if key["company_size"]:
-        add_categorical_multiselect(prettify_label(key["company_size"]), df_use[key["company_size"]], key["company_size"], max_unique=50)
-    if key["company_founded"]:
-        # treat founded year as numeric
-        add_numeric_slider(prettify_label(key["company_founded"]), df_use[key["company_founded"]], key["company_founded"])
+    if company_size_col and company_size_col in df_use:
+        add_categorical_multiselect(company_size_col, df_use[company_size_col], company_size_col, max_unique=50)
+    if company_founded_col and company_founded_col in df_use:
+        add_numeric_slider(company_founded_col, df_use[company_founded_col], company_founded_col)
 
-# ---------------- Sidebar text search filters
+# -------- Sidebar: only text search filters
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
-# Choose a set of candidate text fields to search in (excluding ignored and numeric-heavy)
+# candidate text columns (excluding numeric/datetime and already filtered ones)
 candidates_text = []
+skip_cols = set([c for c in [company_followers_col, followers_col, connections_col, employees_col, company_size_col, company_founded_col] if c])
 for c in df_use.columns:
-    if c == key.get("photo"):
+    if c in skip_cols:
         continue
-    # Skip numeric-like columns
-    if pd.api.types.is_numeric_dtype(df_use[c]):
+    if pd.api.types.is_numeric_dtype(df_use[c]) or pd.api.types.is_datetime64_any_dtype(df_use[c]):
         continue
-    # Skip datetime columns
-    if pd.api.types.is_datetime64_any_dtype(df_use[c]):
-        continue
-    # Skip ignored semantics already covered above
-    if c in (key.get("company_followers"), key.get("followers"), key.get("connections"),
-             key.get("employees"), key.get("company_size"), key.get("company_founded")):
+    if c == col_photo or c == "—":
         continue
     candidates_text.append(c)
 
 with st.sidebar.expander("Choisir les colonnes à rechercher", expanded=False):
-    selected_text_cols = st.multiselect("Colonnes texte", options=[prettify_label(c) for c in candidates_text],
-                                        default=[prettify_label(c) for c in candidates_text[:6]])
-# Map pretty -> real
+    default_pretty = [prettify_label(c) for c in candidates_text[:6]]
+    selected_text_cols_pretty = st.multiselect("Colonnes texte", options=[prettify_label(c) for c in candidates_text], default=default_pretty)
 pretty_to_real = {prettify_label(c): c for c in candidates_text}
-selected_real = [pretty_to_real[p] for p in selected_text_cols if p in pretty_to_real]
-
+selected_real = [pretty_to_real[p] for p in selected_text_cols_pretty if p in pretty_to_real]
 for c in selected_real:
-    v = st.sidebar.text_input(f"{prettify_label(c)}", "")
-    if v:
-        text_filters[c] = ("contains", v.lower())
+    val = st.sidebar.text_input(prettify_label(c), "")
+    if val:
+        text_filters[c] = ("contains", val.lower())
 
-# ---------------- Apply filters
+# -------- Apply filters
 def apply_all_filters(df_in: pd.DataFrame):
     df_out = df_in.copy()
     mask = pd.Series([True] * len(df_out), index=df_out.index)
-    # top numeric/cat filters
     for col_key, (ftype, val) in top_filters.items():
         if col_key not in df_out:
             continue
@@ -205,7 +208,6 @@ def apply_all_filters(df_in: pd.DataFrame):
             mask &= s_num.between(lo, hi)
         elif ftype == "in":
             mask &= s.astype(str).isin(val)
-    # text filters
     for col_key, (ftype, val) in text_filters.items():
         if col_key not in df_out:
             continue
@@ -215,70 +217,74 @@ def apply_all_filters(df_in: pd.DataFrame):
 
 filtered = apply_all_filters(df_use)
 
-# ---------------- Pagination
+# -------- Pagination
 st.sidebar.header("🧭 Pagination")
-page_size = st.sidebar.selectbox("Taille de page", [10, 25, 50, 100], index=1)
+page_size = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96], index=1)
 total_rows = len(filtered)
 total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
 page = st.sidebar.number_input("Page", min_value=1, max_value=max(1, total_pages), value=1, step=1)
 start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
-
 st.markdown(f"**{total_rows:,} leads** après filtres • Page **{page}/{total_pages}**")
 
-# ---------------- Card view
+# -------- Grid Card View
 st.markdown("### 🧾 Résultats")
 subset = filtered.iloc[start:end]
 
-# Prepare fields
-col_first = key["first_name"]
-col_last = key["last_name"]
-col_full = key["full_name"]
-col_company = key["company"]
-col_job = key["job"]
-col_photo = key["photo"]
-col_location = key["location"]
-
-def display_name(row):
-    if col_full and pd.notna(row.get(col_full, np.nan)) and str(row.get(col_full)).strip():
-        return str(row[col_full]).strip()
+def get_display_name(row):
+    # Priority: First + Last, else Full Name, else fallback
     parts = []
-    if col_first and pd.notna(row.get(col_first, np.nan)):
+    if col_first != "—" and pd.notna(row.get(col_first, np.nan)) and str(row.get(col_first)).strip():
         parts.append(str(row[col_first]).strip())
-    if col_last and pd.notna(row.get(col_last, np.nan)):
+    if col_last != "—" and pd.notna(row.get(col_last, np.nan)) and str(row.get(col_last)).strip():
         parts.append(str(row[col_last]).strip())
-    return " ".join(parts) if parts else "(Sans nom)"
+    if parts:
+        return " ".join(parts)
+    if col_full != "—" and pd.notna(row.get(col_full, np.nan)) and str(row.get(col_full)).strip():
+        return str(row[col_full]).strip()
+    return "(Sans nom)"
 
-for _, r in subset.iterrows():
-    with st.container():
-        c1, c2 = st.columns([1, 5])
-        with c1:
-            if col_photo and pd.notna(r.get(col_photo, np.nan)):
-                try:
-                    st.image(r[col_photo], use_container_width=True)
-                except Exception:
+def get_company_job(row):
+    comp = str(row[col_company]).strip() if col_company != "—" and pd.notna(row.get(col_company, np.nan)) else ""
+    job = str(row[col_job]).strip() if col_job != "—" and pd.notna(row.get(col_job, np.nan)) else ""
+    if comp and job:
+        return f"{comp} — {job}"
+    return comp or job or ""
+
+# Build rows of columns
+rows = []
+cards = list(subset.to_dict(orient="records"))
+for i in range(0, len(cards), cards_per_row):
+    rows.append(cards[i:i+cards_per_row])
+
+for row in rows:
+    cols = st.columns(cards_per_row, gap="large")
+    for col, rec in zip(cols, row):
+        with col:
+            # Image on top (if valid URL)
+            if col_photo != "—":
+                img = rec.get(col_photo)
+                if isinstance(img, str) and looks_like_url(img):
+                    try:
+                        st.image(img, use_container_width=True)
+                    except Exception:
+                        st.write("")
+                else:
                     st.write("")
-            else:
-                st.write("")
-        with c2:
-            st.markdown(f"**{display_name(r)}**")
-            line2 = []
-            if col_job and pd.notna(r.get(col_job, np.nan)):
-                line2.append(str(r[col_job]))
-            if col_company and pd.notna(r.get(col_company, np.nan)):
-                line2.append(f"@ {r[col_company]}")
-            if line2:
-                st.write(" — ".join(line2))
-            if col_location and pd.notna(r.get(col_location, np.nan)):
-                st.caption(str(r[col_location]))
+            # Title: Lead Name
+            st.markdown(f"**{get_display_name(rec)}**")
+            # Subtitle: Company — Job (no dates)
+            cj = get_company_job(rec)
+            if cj:
+                st.caption(cj)
+            # Location (optional)
+            if col_location != "—" and pd.notna(rec.get(col_location, np.nan)):
+                st.caption(str(rec[col_location]))
 
-        st.divider()
-
-# ---------------- Export & Stats table
+# -------- Export & Stats table
 st.download_button("⬇️ Télécharger le CSV filtré", data=filtered.to_csv(index=False).encode("utf-8"),
                    file_name="leads_filtres.csv", mime="text/csv")
 
 with st.expander("📊 Statistiques détaillées"):
-    # Compat describe
     try:
         st.write(filtered.describe(include="all", datetime_is_numeric=True))
     except TypeError:
