@@ -97,6 +97,7 @@ if "page_num" not in st.session_state:
     st.session_state.page_num = 1
 
 
+
 # --- Filtres principaux (3 colonnes)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
@@ -127,15 +128,19 @@ if company_size_col:
 if company_founded_col:
     _filter_specs.append(("Création de l'entreprise", company_founded_col, "num"))
 
-cols_top = st.columns(3, gap="large")
-for idx, (label, colname, kind) in enumerate(_filter_specs):
-    with cols_top[idx % 3]:
-        if kind == "num":
-            add_numeric_slider(label, df[colname], colname)
-        else:
-            add_categorical_multiselect(label, df[colname], colname, max_unique=50)
+# Render filters in rows of up to 3 per row
+for i in range(0, len(_filter_specs), 3):
+    row_specs = _filter_specs[i:i+3]
+    cols_row = st.columns(3, gap="large")
+    for j, (label, colname, kind) in enumerate(row_specs):
+        with cols_row[j]:
+            if kind == "num":
+                add_numeric_slider(label, df[colname], colname)
+            else:
+                add_categorical_multiselect(label, df[colname], colname, max_unique=50)
 
 # --- Sidebar: Filtres texte
+
 
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
