@@ -1,4 +1,10 @@
-\n
+import streamlit as st
+import pandas as pd
+import numpy as np
+import io
+import requests
+from urllib.parse import urlparse, quote
+
 def weserv_proxy(url: str) -> str:
     try:
         # Proxy through images.weserv.nl (public image proxy). If it fails, caller will fallback.
@@ -7,13 +13,6 @@ def weserv_proxy(url: str) -> str:
         return f"https://images.weserv.nl/?url={safe}"
     except Exception:
         return url
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-from urllib.parse import urlparse, quote
-import requests
-import io
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
