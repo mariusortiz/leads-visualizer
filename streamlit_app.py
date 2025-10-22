@@ -166,8 +166,8 @@ followers_col = find_col(df, ["followers", "followerscount"])
 connections_col = find_col(df, ["connections", "connection", "connexion"])
 company_size_col = find_col(df, ["companysize", "company size", "size"])
 company_founded_col = find_col(df, ["companyfounded", "founded", "foundation year"])
-last_revenue_col = find_col([...,"Dernier CA Publié", "dernier ca publie", "chiffre d'affaires"])
-last_result_col = find_col([...,"Dernier Résultat Publié", "dernier resultat publie"])
+last_revenue_col = find_col(df, ["Dernier CA Publié", "dernier ca publie", "chiffre d'affaires"])
+last_result_col = find_col(df, ["Dernier Résultat Publié", "dernier resultat publie"])
 
 # === Sidebar: Pagination (en haut) + navigation
 st.sidebar.header("🧭 Pagination")
