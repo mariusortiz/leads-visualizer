@@ -311,7 +311,7 @@ def safe_str(x):
 def render_row(row):
     first = safe_str(row.get(col_first)) if col_first else ""
     last = safe_str(row.get(col_last)) if col_last else ""
-    name = (Nom complet) || (Prénom + Nom) || "(Sans nom)"
+    name = safe_str(row.get(col_fullname)) if col_last else ""
     company = safe_str(row.get(col_company)) if col_company else ""
     job = safe_str(row.get(col_job)) if col_job else ""
     telephone = safe_str(row.get(col_phone)) if col_job else ""
