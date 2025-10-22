@@ -140,7 +140,7 @@ else:
 # --- Colonnes principales (détection souple)
 col_first = find_col(df, ["firstName", "first_name", "firstname", "given name", "givenName"])
 col_last = find_col(df, ["lastName", "last_name", "lastname", "family name", "surname"])
-col_fullname = find_col([...,"Nom complet", "scraperfullname", "full name", "fullname"])
+col_fullname = find_col(df, ["Nom complet", "scraperfullname", "full name", "fullname"])
 col_company = find_col(df, ["companyName", "company name", "company", "employer"])
 col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "position", "role"])
 col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
