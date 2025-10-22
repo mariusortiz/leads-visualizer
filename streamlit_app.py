@@ -145,7 +145,7 @@ col_company = find_col(df, ["companyName", "company name", "company", "employer"
 col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "position", "role"])
 col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
 col_email = find_col(df, ["professionalemail", "email", "mail", "emailaddress", "contact email"])
-col_phone = find_col([...,"Téléphone","telephone","phone","mobile","phonenumber", "Téléphone Société"])
+col_phone = find_col(df, ["Téléphone","telephone","phone","mobile","phonenumber", "Téléphone Société"])
 
 # --- Filtre email obligatoire
 if col_email:
