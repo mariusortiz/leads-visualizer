@@ -1,20 +1,19 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
+from typing import Optional, Dict, Any
 
 st.set_page_config(page_title="Lead Manager", page_icon="📇", layout="wide")
 
 # ---------- Helpers
 def prettify_label(s: str) -> str:
     if not isinstance(s, str):
-        return s
+        return str(s)
     s = s.replace("_", " ").replace("-", " ")
     for k in ["linkedin", "LinkedIn", "Linkedin"]:
         s = s.replace(k, "")
     s = " ".join(s.split())
     return s.strip().title()
-
 
 # French labels mapping for column names
 FRENCH_LABELS = {
@@ -66,7 +65,7 @@ FRENCH_LABELS = {
     "previousschooldescription": "Description ancienne formation",
     "skillslabel": "Compétences",
     "location": "Localisation générale",
-    "description": "Description du profil"
+    "description": "Description du profil",
 }
 
 def fr_label(col: str) -> str:
@@ -74,7 +73,8 @@ def fr_label(col: str) -> str:
         return str(col)
     key = col.lower()
     return FRENCH_LABELS.get(key, prettify_label(col))
-def find_col(df: pd.DataFrame, candidates) -> str | None:
+
+def find_col(df: pd.DataFrame, candidates) -> Optional[str]:
     if df is None or df.empty:
         return None
     cmap = {c.lower(): c for c in df.columns}
@@ -92,37 +92,64 @@ def find_col(df: pd.DataFrame, candidates) -> str | None:
     return None
 
 @st.cache_data(show_spinner=False)
-def read_csv_any(uploaded) -> pd.DataFrame:
+def read_any(uploaded, sheet_name: Optional[str]) -> Dict[str, Any]:
+    """Return dict with 'df' and 'sheets' (if Excel)."""
+    name = uploaded.name.lower()
+    out: Dict[str, Any] = {"df": None, "sheets": None}
     try:
-        return pd.read_csv(uploaded, sep=None, engine="python", low_memory=False)
-    except Exception:
-        uploaded.seek(0)
-        return pd.read_csv(uploaded, low_memory=False)
+        if name.endswith(".csv"):
+            df = pd.read_csv(uploaded, sep=None, engine="python", low_memory=False)
+            out["df"] = df
+        elif name.endswith(".xlsx") or name.endswith(".xls"):
+            xls = pd.ExcelFile(uploaded)
+            out["sheets"] = xls.sheet_names
+            use_sheet = sheet_name or xls.sheet_names[0]
+            df = pd.read_excel(xls, sheet_name=use_sheet, dtype=str)
+            out["df"] = df
+        else:
+            df = pd.read_csv(uploaded, low_memory=False)
+            out["df"] = df
+    except Exception as e:
+        try:
+            df = pd.read_excel(uploaded, dtype=str)
+            out["df"] = df
+        except Exception:
+            raise e
+    return out
 
 # ---------- UI
 st.title("📇 Lead Manager")
-st.caption("Liste + filtres + pagination (emails obligatoires)")
+st.caption("Excel/CSV → liste + filtres + pagination (emails obligatoires)")
 
-uploaded = st.file_uploader("Déposez votre fichier CSV", type=["csv"])
+uploaded = st.file_uploader("Déposez votre fichier CSV ou Excel", type=["csv", "xlsx", "xls"])
 if uploaded is None:
-    st.info("Déposez un fichier CSV pour commencer.")
+    st.info("Déposez un fichier pour commencer.")
     st.stop()
 
-df = read_csv_any(uploaded)
+# Excel → choix de la feuille
+chosen_sheet = None
+if uploaded.name.lower().endswith((".xlsx", ".xls")):
+    probe = read_any(uploaded, sheet_name=None)
+    sheets = probe.get("sheets") or []
+    if sheets:
+        chosen_sheet = st.selectbox("Feuille Excel", sheets, index=0)
+    df = probe["df"] if chosen_sheet is None else read_any(uploaded, sheet_name=chosen_sheet)["df"]
+else:
+    df = read_any(uploaded, sheet_name=None)["df"]
 
-# --- Colonnes principales
+# --- Colonnes principales (détection souple)
 col_first = find_col(df, ["firstName", "first_name", "firstname", "given name", "givenName"])
 col_last = find_col(df, ["lastName", "last_name", "lastname", "family name", "surname"])
 col_company = find_col(df, ["companyName", "company name", "company", "employer"])
 col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "position", "role"])
 col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
-col_email = find_col(df, ["email", "mail", "emailaddress", "contact email"])
+col_email = find_col(df, ["professionalemail", "email", "mail", "emailaddress", "contact email"])
 
 # --- Filtre email obligatoire
 if col_email:
     df = df[df[col_email].astype(str).str.contains("@", na=False)]
 else:
-    st.error("Aucune colonne email détectée (email/mail).")
+    st.error("Aucune colonne email détectée (ex. ProfessionalEmail, Email, Mail).")
     st.stop()
 
 # --- Stats
@@ -132,32 +159,19 @@ c1.metric("Leads (emails valides)", f"{len(df):,}")
 if col_company:
     c2.metric("Entreprises uniques", f"{df[col_company].nunique():,}")
 
-# --- Filtres détectés
-followers_col = None
-connections_col = None
-company_size_col = None
-company_founded_col = None
+# --- Colonnes utilisées pour les filtres avancés (si présentes)
+followers_col = find_col(df, ["followers", "followerscount"])
+connections_col = find_col(df, ["connections", "connection", "connexion"])
+company_size_col = find_col(df, ["companysize", "company size", "size"])
+company_founded_col = find_col(df, ["companyfounded", "founded", "foundation year"])
 
-for c in df.columns:
-    lc = c.lower()
-    if followers_col is None and ("followers" in lc or "followerscount" in lc):
-        followers_col = c
-    if connections_col is None and ("connection" in lc or "connexion" in lc):
-        connections_col = c
-    if company_size_col is None and ("companysize" in lc or "company size" in lc or lc == "size"):
-        company_size_col = c
-    if company_founded_col is None and ("companyfounded" in lc or "founded" in lc or "foundation year" in lc):
-        company_founded_col = c
-
-# === Sidebar: Pagination en HAUT + navigation
+# === Sidebar: Pagination (en haut) + navigation
 st.sidebar.header("🧭 Pagination")
 page_size_choice = st.sidebar.selectbox("Taille de page", [12, 24, 48, 96, "TOUT"], index=1, key="page_size_choice")
 if "page_num" not in st.session_state:
     st.session_state.page_num = 1
 
-
-
-# --- Filtres principaux (3 colonnes)
+# --- Filtres principaux (rangées de 3)
 st.markdown("### 🎛️ Filtres principaux")
 top_filters = {}
 
@@ -176,22 +190,20 @@ def add_categorical_multiselect(label_fr, series, key_name, max_unique=50):
         if v:
             top_filters[key_name] = ("in", set(v))
 
-# Build the list of available filters in desired order
-_filter_specs = []
+filter_specs = []
 if followers_col:
-    _filter_specs.append(("Nombre de followers", followers_col, "num"))
+    filter_specs.append(("Nombre de followers", followers_col, "num"))
 if connections_col:
-    _filter_specs.append(("Nombre de connexions", connections_col, "num"))
+    filter_specs.append(("Nombre de connexions", connections_col, "num"))
 if company_size_col:
-    _filter_specs.append(("Taille de l'entreprise", company_size_col, "cat"))
+    filter_specs.append(("Taille de l'entreprise", company_size_col, "cat"))
 if company_founded_col:
-    _filter_specs.append(("Création de l'entreprise", company_founded_col, "num"))
+    filter_specs.append(("Création de l'entreprise", company_founded_col, "num"))
 
-# Render filters in rows of up to 3 per row
-for i in range(0, len(_filter_specs), 3):
-    row_specs = _filter_specs[i:i+3]
+for i in range(0, len(filter_specs), 3):
+    row = filter_specs[i:i+3]
     cols_row = st.columns(3, gap="large")
-    for j, (label, colname, kind) in enumerate(row_specs):
+    for j, (label, colname, kind) in enumerate(row):
         with cols_row[j]:
             if kind == "num":
                 add_numeric_slider(label, df[colname], colname)
@@ -199,8 +211,6 @@ for i in range(0, len(_filter_specs), 3):
                 add_categorical_multiselect(label, df[colname], colname, max_unique=50)
 
 # --- Sidebar: Filtres texte
-
-
 st.sidebar.header("🔎 Recherche (texte)")
 text_filters = {}
 skip_cols = {x for x in [followers_col, connections_col, company_size_col, company_founded_col] if x}
@@ -237,7 +247,7 @@ def apply_all_filters(df_in: pd.DataFrame):
 
 filtered = apply_all_filters(df)
 
-# --- Calcul pagination
+# --- Pagination (calcul)
 total_rows = len(filtered)
 if page_size_choice == "TOUT":
     page_size = total_rows if total_rows > 0 else 1
@@ -247,7 +257,7 @@ else:
     page_size = int(page_size_choice)
     total_pages = (total_rows - 1) // page_size + 1 if total_rows > 0 else 1
 
-# Prev / Next buttons
+# Prev / Next
 cprev, cpage, cnext = st.sidebar.columns([1, 2, 1])
 with cprev:
     if st.button("◀", disabled=(st.session_state.page_num <= 1)):
@@ -263,7 +273,7 @@ page = st.session_state.page_num
 start, end = (page - 1) * page_size, (page - 1) * page_size + page_size
 st.caption(f"{total_rows:,} leads après filtres • Page {page}/{total_pages}")
 
-# --- UI List stylée
+# --- Liste stylée
 st.markdown("### 🧾 Résultats")
 st.markdown(
     """
@@ -314,7 +324,7 @@ def render_row(row):
     '''
     st.markdown(html, unsafe_allow_html=True)
 
-# Header
+# En-tête
 st.markdown(
     '''
     <div class="list-header">
