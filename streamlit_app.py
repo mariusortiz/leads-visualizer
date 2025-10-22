@@ -140,10 +140,12 @@ else:
 # --- Colonnes principales (détection souple)
 col_first = find_col(df, ["firstName", "first_name", "firstname", "given name", "givenName"])
 col_last = find_col(df, ["lastName", "last_name", "lastname", "family name", "surname"])
+col_fullname = find_col([...,"Nom complet", "scraperfullname", "full name", "fullname"])
 col_company = find_col(df, ["companyName", "company name", "company", "employer"])
 col_job = find_col(df, ["linkedinHeadline", "job title", "title", "headline", "position", "role"])
 col_location = find_col(df, ["linkedinJobLocation", "location", "city", "country", "region"])
 col_email = find_col(df, ["professionalemail", "email", "mail", "emailaddress", "contact email"])
+col_phone = find_col([...,"Téléphone","telephone","phone","mobile","phonenumber", "Téléphone Société"])
 
 # --- Filtre email obligatoire
 if col_email:
@@ -164,6 +166,8 @@ followers_col = find_col(df, ["followers", "followerscount"])
 connections_col = find_col(df, ["connections", "connection", "connexion"])
 company_size_col = find_col(df, ["companysize", "company size", "size"])
 company_founded_col = find_col(df, ["companyfounded", "founded", "foundation year"])
+last_revenue_col = find_col([...,"Dernier CA Publié", "dernier ca publie", "chiffre d'affaires"])
+last_result_col = find_col([...,"Dernier Résultat Publié", "dernier resultat publie"])
 
 # === Sidebar: Pagination (en haut) + navigation
 st.sidebar.header("🧭 Pagination")
@@ -307,9 +311,10 @@ def safe_str(x):
 def render_row(row):
     first = safe_str(row.get(col_first)) if col_first else ""
     last = safe_str(row.get(col_last)) if col_last else ""
-    name = (first + " " + last).strip() or "(Sans nom)"
+    name = (Nom complet) || (Prénom + Nom) || "(Sans nom)"
     company = safe_str(row.get(col_company)) if col_company else ""
     job = safe_str(row.get(col_job)) if col_job else ""
+    telephone = safe_str(row.get(col_phone)) if col_job else ""
     company_job = " — ".join([s for s in [company, job] if s])
     email = safe_str(row.get(col_email))
     email_html = f'<a href="mailto:{email}">{email}</a>' if "@" in email else ""
@@ -319,6 +324,7 @@ def render_row(row):
         <div><strong>{name}</strong></div>
         <div>{company_job}</div>
         <div>{email_html}</div>
+        <div>{telephone}</div>
         <div class="muted">{loc}</div>
     </div>
     '''
